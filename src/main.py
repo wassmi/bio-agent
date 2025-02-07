@@ -9,82 +9,64 @@ from rich.live import Live
 from rich.table import Table
 import argparse
 import sys
+import asyncio
 
-def main():
+async def main():
     console = Console()
     
     parser = argparse.ArgumentParser(
-        description="BioAgent - Bioinformatics Workflow Assistant",
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        description="BioAgent - Bioinformatics Workflow Assistant"
     )
-    parser.add_argument(
-        "--run", 
-        help="Command to run",
-        required=True
-    )
-    parser.add_argument(
-        "file", 
-        help="Input file path (e.g., sample.fastq)",
-        type=str
-    )
+    parser.add_argument("--run", required=True)
+    parser.add_argument("file", type=Path)
 
-    try:
-        args = parser.parse_args()
-    except SystemExit:
+    args = parser.parse_args()
+    file_path = args.file
+
+    # Validate file existence
+    if not file_path.exists():
         console.print(Panel(
-            "[bold yellow]Missing Input File[/]\n\n"
-            "[bold white]Your command needs an input file to work on.[/]\n\n"
-            "[bold green]Correct Format:[/]\n"
-            "python src/main.py --run \"your command\" input_file.fastq\n\n"
-            "[bold green]Example:[/]\n"
-            "python src/main.py --run \"analyze this file\" SRR11140744_R1.fastq",
-            title="🔍 Usage Guide",
-            border_style="yellow"
+            f"[bold red]File not found:[/] {file_path}\n\n"
+            "[bold green]Please check:[/]\n"
+            "1. The file path is correct\n"
+            "2. The file exists in the specified location\n"
+            "3. You have read permissions for the file",
+            title="🔍 File Check"
         ))
         return
 
-    try:
-        with console.status("[bold green]Initializing Bio-Agent...") as status:
-            load_dotenv()
-            groq_api_key = os.getenv("GROQ_API_KEY")
+    with console.status("[bold green]Initializing Bio-Agent...") as status:
+        load_dotenv()
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        
+        if not groq_api_key:
+            console.print("[bold red]Error:[/] GROQ_API_KEY not found")
+            return
             
-            if not groq_api_key:
-                console.print("[bold red]Error:[/] GROQ_API_KEY not found in environment variables")
-                return
-                
-            agent = BioAgent(api_key=groq_api_key)
+        agent = BioAgent(api_key=groq_api_key)
+        
+        console.print(Panel.fit(
+            f"[bold blue]Analysis Request[/]\n"
+            f"Command: [green]{args.run}[/]\n"
+            f"File: [yellow]{file_path}[/]"
+        ))
+        
+        results = await agent.analyze_file(file_path, args.run)
+        
+        console.print("\n[bold green]Analysis Complete![/]")
+        
+        # Define the display_results function
+        def display_results(console, results):
+            table = Table(title="Analysis Results")
+            table.add_column("Key", style="cyan")
+            table.add_column("Value", style="magenta")
             
-            file_path = Path(args.file)
+            for key, value in results.items():
+                table.add_row(str(key), str(value))
             
-            # Create analysis panel
-            console.print(Panel.fit(
-                f"[bold blue]Analysis Request[/]\n"
-                f"Command: [green]{args.run}[/]\n"
-                f"File: [yellow]{file_path}[/]"
-            ))
-            
-            results = agent.analyze_file(file_path, args.run)
-            
-            # Print results in a nice table
-            table = Table(show_header=True, header_style="bold magenta")
-            table.add_column("Status")
-            table.add_column("Command Executed")
-            table.add_row(
-                results["status"],
-                results["command_executed"]
-            )
-            
-            console.print("\n[bold green]Analysis Complete![/]")
             console.print(table)
         
-    except Exception as e:
-        console.print(Panel(
-            "[bold red]Error:[/] Please provide both the command and input file\n\n"
-            "[bold green]Example usage:[/]\n"
-            "python src/main.py --run \"analyze this file\" input.fastq",
-            title="Usage Guide"
-        ))
-        return
+        display_results(console, results)
 
 if __name__ == "__main__":
-    main()   
+    asyncio.run(main())

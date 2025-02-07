@@ -32,34 +32,42 @@ class BioAgent:
             print(line, end='')
             
         process.wait()
-    def analyze_file(self, file_path: Path, command: str) -> Dict[str, Any]:
+    async def analyze_file(self, file_path: Path, command: str) -> Dict[str, Any]:
         self.logger.info(f"Starting analysis for {file_path}")
     
-        analysis_type = self.llm.predict(
+        analysis_type = self.llm.invoke(
             f"Analyze this task: '{command}' for file {file_path}. "
             f"Answer with only one word: 'script' or 'command'"
-        ).strip().lower()
+        ).content.strip().lower()
     
         if analysis_type == 'script':
-            script = self.llm.predict(
+            script = self.llm.invoke(
                 f"Generate a Python script for: '{command}' for file {file_path}. "
-                f"Use exactly this file path: '{file_path}'. "
-                f"Return only executable code without comments. "
-                f"The script should modify the file content directly."
-            )            
+                f"Return only the executable Python code, no markdown, no explanations."
+            ).content
+            
             result = execute_generated_code(script, Path.cwd())
             return {
                 "status": result["status"],
                 "command_executed": result["command_executed"]
             }
         else:
-            command_to_run = self.llm.predict(
-                f"Generate a command for: '{command}' for file {file_path}. "
-                f"Analyze the file type and requirements. Choose appropriate tools. "
-                f"Return only the command."
-            ).strip()
-            self.execute_command(command_to_run)
-            return {
+            command_to_run = self.llm.invoke(
+                f"Generate a single shell command for: '{command}' for file {file_path}. "
+                f"Return only the command itself, no explanations or markdown formatting."
+            ).content.strip()
+            
+            # Initialize default result structure
+            result = {
                 "status": "complete",
-                "command_executed": command_to_run
-            }            
+                "command_executed": command_to_run,
+                "output": "",
+                "error": ""
+            }
+            
+            # Execute command and update result if successful
+            execution_result = self.execute_command(command_to_run)
+            if execution_result:
+                result.update(execution_result)
+                
+            return result                        
