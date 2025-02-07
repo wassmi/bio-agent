@@ -1,24 +1,41 @@
 import subprocess
 import sys
 from pathlib import Path
-from typing import Union
+from typing import Union, Dict, Any  # Import Dict and Any from typing
+import os
 
 def is_fastqc_installed() -> bool:
     """
-    Checks if FASTQC is installed and accessible in the system's PATH.
+    Checks if FASTQC is installed and accessible in the system's PATH,
+    or if it exists in the bio-agent2/FastQC directory.
     Returns True if FASTQC is installed, False otherwise.
     """
+    # Check system PATH first
     try:
         subprocess.run(["fastqc", "--version"], check=True, capture_output=True)
         return True
     except FileNotFoundError:
-        return False
+        pass  # FASTQC not in PATH
 
+    # Check if FASTQC exists in the bio-agent2/FastQC directory
+    fastqc_path = Path(__file__).parent.parent / "FastQC" / "fastqc"
+    print(f"Checking for FASTQC at: {fastqc_path}")  # Add this line
+    executable = os.access(fastqc_path, os.X_OK)
+    print(f"os.access(fastqc_path, os.X_OK) returned: {executable}")  # Add this line
+    if fastqc_path.is_file() and executable:
+        return True
+
+    return False
 def display_fastqc_installation_instructions() -> None:
     """
-    Prints user-friendly instructions on how to install FASTQC.
+    Prints user-friendly instructions on how to install FASTQC,
+    or informs the user that it should be available in the bio-agent2/FastQC directory.
     """
-    print("\nFASTQC is not installed. Please install it following the instructions below:\n")
+    print("\nFASTQC is not installed in your system's PATH.")
+    print("However, it is included in the bio-agent2/FastQC directory.")
+    print("Please ensure that this script is run from within the bio-agent2 directory,")
+    print("or that the bio-agent2/FastQC directory is in your system's PATH.\n")
+    print("If you still encounter issues, you can install FASTQC system-wide following the instructions below:\n")
     print("FASTQC is a standalone Java application. You can download it from:")
     print("https://www.bioinformatics.babraham.ac.uk/projects/fastqc/\n")
     print("Installation instructions for different operating systems:\n")
@@ -37,58 +54,96 @@ def check_fastqc() -> None:
         display_fastqc_installation_instructions()
         sys.exit(1)
 
-def validate_fastq_file(file_path: Union[str, Path]) -> bool:
+def run_shell_command(command: str, work_dir: Path) -> Dict[str, Any]:
     """
-    Validates if the given file is a FASTQ file.
-    Returns True if valid, False otherwise.
+    Executes shell commands and returns the results.
+    Prepends the bio-agent2/FastQC directory to the PATH if FASTQC is being called.
     """
-    file_path = Path(file_path)
-    if not file_path.exists():
-        return False
-    
-    # Check file extension
-    valid_extensions = {'.fastq', '.fq', '.fastq.gz', '.fq.gz'}
-    if not any(str(file_path).lower().endswith(ext) for ext in valid_extensions):
-        return False
-    
-    return True
+    if command.startswith("fastqc"):
+        fastqc_path = Path(__file__).parent.parent / "FastQC"
+        env = os.environ.copy()
+        env["PATH"] = str(fastqc_path) + os.pathsep + env["PATH"]
+        try:
+            result = subprocess.run(
+                command.split(),
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=work_dir,
+                env=env
+            )
+            return {"success": True, "output": result.stdout, "error": result.stderr}
+        except subprocess.CalledProcessError as e:
+            return {"success": False, "error": str(e)}
+    else:
+        try:
+            result = subprocess.run(
+                command.split(),
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=work_dir
+            )
+            return {"success": True, "output": result.stdout, "error": result.stderr}
+        except subprocess.CalledProcessError as e:
+            return {"success": False, "error": str(e)}
 
 import subprocess
+import sys
+from pathlib import Path
+from typing import Union, Dict, Any
+import os
+
+def is_fastqc_installed() -> bool:
+    """
+    Checks if FASTQC is installed and accessible in the system's PATH.
+    Returns True if FASTQC is installed, False otherwise.
+    """
+    try:
+        subprocess.run(["fastqc", "--version"], check=True, capture_output=True)
+        return True
+    except FileNotFoundError:
+        return False
+import ast
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, Any
-from datetime import datetime
+from agent.models import ScriptConfig, ExecutionResult
 
 def execute_generated_code(code: str, output_dir: Path) -> Dict[str, Any]:
-    import os
-    import sys
-    import subprocess
-
     try:
-        # Create a temporary Python file
-        temp_file = output_dir / "generated_script.py"
-        with open(temp_file, "w") as f:
-            f.write(code)
+        # Let Pydantic handle validation and formatting
+        config = ScriptConfig(
+            code=code,
+            output_dir=output_dir
+        )
         
-        # Execute the script with the output directory as an environment variable
-        env = os.environ.copy()
-        env["OUTPUT_DIR"] = str(output_dir)
+        # Create and execute the formatted script
+        temp_file = config.output_dir / "generated_script.py"
+        with open(temp_file, "w") as f:
+            f.write(config.code)
+        
         result = subprocess.run(
             [sys.executable, str(temp_file)],
             capture_output=True,
             text=True,
-            env=env
+            check=True
         )
         
-        return {
-            "success": result.returncode == 0,
-            "output": result.stdout,
-            "error": result.stderr if result.returncode != 0 else None
-        }
+        return ExecutionResult(
+            status="complete",
+            command_executed=config.code,
+            output=result.stdout,
+            error=result.stderr
+        ).model_dump()
+        
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ExecutionResult(
+            status="failed",
+            command_executed=code,
+            error=str(e)
+        ).model_dump()
 
 def create_output_directory(input_file: Path) -> Path:
     """
@@ -98,7 +153,6 @@ def create_output_directory(input_file: Path) -> Path:
     output_dir = input_file.parent / f"bioagent_results_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
-
 def run_shell_command(command: str, work_dir: Path) -> Dict[str, Any]:
     """
     Executes shell commands and returns the results
